@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "arm_math.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -46,6 +46,13 @@ TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
+arm_pid_instance_f32 PID = {0};
+float position =0;
+float setposition =0;
+float Vfeedback = 0;
+float speed=0;
+
+
 uint32_t QEIReadRaw;
 float Angular=0;
 float MotorSetpoint=0;
@@ -72,7 +79,17 @@ struct _ADC_tag ADC1_Channel[1] =
 
 };
 
-
+//float PlantSimulation(float VIn) // run with fix frequency
+//	  {
+//	  static float speed =0;
+//	  static float position =0;
+//	  float current= VIn - speed * 0.0123;
+//	  float torque = current * 0.456;
+//	  float acc = torque * 0.789;
+//	  speed += acc;
+//	  position += speed;
+//	  return position;
+//	  }
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -83,6 +100,8 @@ static void MX_ADC1_Init(void);
 static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 void ADC_Read_blocking();
+float PlantSimulation(float VIn) ;
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -127,6 +146,11 @@ int main(void)
   HAL_TIM_Base_Start(&htim2);
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
+
+  PID.Kp =0.1;
+  PID.Ki =0;
+  PID.Kd = 0;
+  arm_pid_init_f32(&PID, 0);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -136,20 +160,38 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+
 	  QEIReadRaw = __HAL_TIM_GET_COUNTER(&htim3);
 	  angularposition();
 	  ADC_Read_blocking();
 	  Setpoint();
-	  if (HAL_GPIO_ReadPin(B1_GPIO_Port, B1_Pin))
+	  if (Vfeedback>0.5)
 	  {
+		  speed=(Vfeedback*20.0)+200.0;
 	  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
-	  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 15000);
+	  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, speed);
 	  }
-	  else
+
+	  else if (Vfeedback<-0.5)
+	 	  {
+		  speed=-(Vfeedback*20.0)+200.0;
+	 	  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1,speed);
+	 	  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);
+	 	  }
+	  else if (Vfeedback <0.5 && Vfeedback>-0.5)
+	 	  {
+	 		  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 0);
+	 		  	  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);
+	 	  }
+
+	  static uint32_t timestamp =0;
+	  if(timestamp < HAL_GetTick())
 	  {
-		  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 15000);
-		  	  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 0);
+	  timestamp = HAL_GetTick()+10;
+	  Vfeedback = (arm_pid_f32(&PID, setposition - position))*10;
+//	  position = PlantSimulation(Vfeedback);
 	  }
+
   }
   /* USER CODE END 3 */
 }
@@ -433,14 +475,14 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 void Setpoint()
 {
-	MotorSetpoint= (ADC1_Channel[0].data/4095.0)*360;
+	setposition= (ADC1_Channel[0].data/4095.0)*360;
 }
 
 
 
 void angularposition()
 {
-	Angular=(QEIReadRaw/3072.0)*360.0;
+	position=(QEIReadRaw/3072.0)*360.0;
 }
 
 void ADC_Read_blocking()
